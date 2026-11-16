@@ -1,0 +1,10 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "shares",
+      "fieldPath": "html",
+      "indexes": []
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Database: Standard Edition (default) Cloud Firestore
+    //
+    // This security rules file assumes the following data structures:
+    //
+    // Collection: shares
+    // Document ID: {shareId} matching ^[A-Za-z0-9_-]{10,32}$
+    //   - Direct `get` is public so anyone with the exact link can view
+    //     the shared HTML animation without signing in.
+    //   - Collection `list` / queries are denied to prevent enumeration.
+    //   - `create` is public (unauthenticated pastebin-style share link)
+    //     and strictly validated for schema, types, sizes, and server time.
+    //   - `update` and `delete` are denied so shared links are immutable.
+    // Fields:
+    //   - v: int (required, immutable, must equal 1) - schema version
+    //   - html: string (required, immutable, 1..900000 chars) - HTML animation source
+    //   - len: int | float (required, immutable, 1..120) - animation duration in seconds
+    //   - size: string (required, immutable, '1080x1920' | '720x1280') - canvas preset
+    //   - title: string (required, immutable, 0..160 chars) - display title
+    //   - createdAt: timestamp (required, immutable, must equal request.time) - creation time
+    //
+    // All other collections and subcollections are denied by default.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Validate that all required keys exist in the document map
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    // Validate that the document map contains only the allowed keys
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    // Validate string type and inclusive character length bounds
+    function validStringLength(value, minLen, maxLen) {
+      return value is string &&
+        value.size() >= minLen &&
+        value.size() <= maxLen;
+    }
+
+    // Validate numeric type (int or float) and inclusive range bounds.
+    // IEEE 754 NaN comparisons evaluate to false, rejecting NaN and +/-Infinity.
+    function isValidNumberRange(value, minVal, maxVal) {
+      return (value is int || value is float) &&
+        value >= minVal &&
+        value <= maxVal;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    // Validate share document ID format (10..32 URL-safe characters)
+    function isValidShareId(shareId) {
+      return shareId is string &&
+        shareId.matches('^[A-Za-z0-9_-]{10,32}$');
+    }
+
+    // Validate share document payload schema, types, ranges, enums, and server time
+    function isValidShare(data) {
+      let allowedFields = ['v', 'html', 'len', 'size', 'title', 'createdAt'];
+      return hasRequiredFields(data, allowedFields) &&
+        hasOnlyAllowedFields(data, allowedFields) &&
+        data.v is int &&
+        data.v == 1 &&
+        validStringLength(data.html, 1, 900000) &&
+        isValidNumberRange(data.len, 1, 120) &&
+        data.size is string &&
+        data.size in ['1080x1920', '720x1280'] &&
+        validStringLength(data.title, 0, 160) &&
+        data.createdAt is timestamp &&
+        data.createdAt == request.time;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Default deny across all other collections, paths, and subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    match /shares/{shareId} {
+      // Allow anyone with the exact share link to read a single share document
+      allow get: if true;
+
+      // Deny collection listing/querying to prevent enumeration or scraping
+      allow list: if false;
+
+      // Allow unauthenticated creation of immutable share documents with strict validation.
+      // Note: Attempts to overwrite an existing shareId evaluate `update` (denied below).
+      allow create: if isValidShareId(shareId) &&
+        isValidShare(request.resource.data);
+
+      // Shared review links are strictly immutable
+      allow update, delete: if false;
+    }
+  }
+}
